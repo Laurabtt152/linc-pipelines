@@ -1,0 +1,347 @@
+---
+#   _______ _____ _____  _                    _       _
+#  |__   __|_   _|  __ \| |                  (_)     | |
+#     | |    | | | |__) | |     ___  ___ _ __ _ _ __ | |_ ___
+#     | |    | | |  _  /| |    / __|/ __| '__| | '_ \| __/ __|
+#     | |   _| |_| | \ \| |____\__ \ (__| |  | | |_) | |_\__ \
+#     |_|  |_____|_|  \_\______|___/\___|_|  |_| .__/ \__|___/
+#                                              | |
+#                                              |_|
+#
+# Copyright (C) 2018-2024 University of Oxford
+# Part of the FMRIB Software Library (FSL)
+# Author: Istvan N. Huszar
+
+# This is a configuration file for 2D-to-2D histology-to-block registration,
+# aka
+
+#                              MND Pipeline Stage 1
+
+# Further fields might be added under any section at the user's convenience,
+# but removing fields may lead to the breakdown of the registration script.
+# YAML formatting conventions apply. Syntax errors may cause a breakdown.
+# Metric units have been defined here as millimetres, but as long as all inputs
+# are consistent, they may equally represent micrometres, inches, or any other
+# unit of length.
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ HEADER ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+
+# Configuration file metadata for descriptive and record-keeping purposes.
+header:
+  author: Istvan N Huszar
+  title: LINC Microscopy to blockface image registration script
+  description: Adapted for the LINC Project at the request of Professor Anastasia Yendiki.
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ GENERAL ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+
+# Configurations to define the context, the flow, and the output of the
+# registration script.
+general:
+  # Operating system: linux or macosx
+  system: linux
+  # Direction of the registration: histo->block (h2b) or block->histo (b2h)
+  # If h2b, the coordinates of the histology are mapped onto the blockface image,
+  # and the blockface image will be aligned to the histology image. If b2h, the
+  # coordinates of the blockface image are mapped onto the histology domain,
+  # and the histology image is warped to the domain of the blockface image.
+  direction: b2h
+  # Order of the registration substages.
+  # Any substage may be skipped or repeated. This also allows the registration
+  # to be continued from a previous result by loading the appropriate TImage
+  # files as inputs (see later).
+  stages: [rotation, rigid, affine, nonlinear]
+  # Type of scaling transformation: isotropic (true), anisotropic (false)
+  # If false, the initial values and boundaries must be given for both
+  # scaling parameters (see later).
+  isotropic: true
+  # Output directory (it will be created if it does not exist)
+  outputdir: /Users/inhuszar/Downloads/anastasia/sample2/reg_tiff/
+  # Status messages of at least 'loglevel' priority will be included in the logs
+  # Priority levels: debug (10), info (20), warning (30), error (40),
+  # critical (50)
+  loglevel: debug
+  # Display warnings: true or false
+  warnings: false
+  # Display status messages (logs): true or false
+  verbose: true
+  # Name of the internal logger instance
+  name: histology_to_block
+  # Log file (overwrites existing logs); contents are defined by 'loglevel'.
+  # If null, no logs will be saved to disk, but they may still be displayed.
+  logfile: /Users/inhuszar/Downloads/anastasia/sample2/reg_tiff/logfile.log
+  # Parameter log file (overwrites existing parameter logs)
+  # If null, parameter updates will not be recorded.
+  paramlogfile: /Users/inhuszar/Downloads/anastasia/sample2/reg_tiff/paramlog.log
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ INPUT IMAGES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+
+# ::::::::::::::::::::::::::::::::: Histology :::::::::::::::::::::::::::::::: #
+
+histology:
+  # Input path (common photo formats: PNG, TIFF, JPG; native histology: SVS)
+  # If the input is a TImage, all other fields in this section are ignored.
+  file: /Users/inhuszar/Downloads/anastasia/sample2/sub-MR256_sample-slice0050_stain-LY_DF.tif
+  # If the input file is a multi-page TIFF or SVS, the relevant page(s) must
+  # be specified here. For other inputs, this field is ignored. For SVS
+  # resolution pyramids, consecutive pages most commonly refer to images of
+  # decreasing resolution, a slide thumbnail, and a slide label reading. The
+  # purpose of choosing a lower-resolution image is to save computation time if
+  # the registration is to be carried out at the lower resolution of the other
+  # image. If in doubt, use the BioFormats importer of Fiji/ImageJ to explore
+  # the pages of your input image. The page numbers here are zero-indexed, and
+  # multiple pages can be loaded e.g., as [3, 4]. The input data will be stored
+  # in TImage format, and separate pages will be stored as layers of the same
+  # TImage, hence the pages must have the same aspect ratio.
+  pages: [0]
+  # Image resolution in mm/px. If multiple pages are loaded, this should be
+  # the resolution the page that was loaded last.
+  resolution: 0.05   # mm/px
+  # Data type in NumPy convention (e.g., f4: 32-bit floating-point)
+  # NOTE: I set this to uint-8 (u1), so that an erroneus header that flags
+  # the data as signed int-8 (i1) doesn't corrupt the image.
+  # If the input is floating-point type, change this to f4 (32-bit) or f8 (64-bit).
+  dtype: u1
+  # If mem, the image data is loaded to memory, if hdd, it is kept on the disk.
+  storage: mem
+  # Specify or auto-generate a cost function mask for the slice image.
+  mask:
+    # Specify mask image using a full path to the image file. The mask image
+    # must have the same aspect ratio as the input image. No mask: null.
+    file: null
+    # Create a binary mask by segmenting the image using both a lower and an
+    # upper threshold value. Values are relative to the maximum intensity.
+    # Pixels with intensities lower than the thr, or higher than the uthr will
+    # be excluded from the registration. No mask: thr=0, uthr=1.
+    automask: {thr: 0, uthr: 1}
+    # Execute a function to generate a mask. The function must be defined in
+    # the registration script under the same name as it is referenced by here.
+    # See the source code for function templates. No mask: null.
+    function: null
+    # Normalise mask values to the [0, 1] range: true or false.
+    normalise: true
+  # Preview the histology image after preprocessing.
+  preview: false
+  # Save the processed histology image in TImage format to the output directory.
+  export: true
+  # Create a PNG version of the histology image (after preprocessing)
+  snapshot: true
+
+
+# :::::::::::::::::::::::::::: Blockface photograph :::::::::::::::::::::::::: #
+
+block:
+  # Input path (common photo formats: PNG, TIFF, JPG, BMP)
+  # If the input is a TImage, all other fields in this section are ignored.
+  file: /Users/inhuszar/Downloads/anastasia/sample2/sub-MR256_sample-slice0050_photo.tif
+  # Image resolution in mm/px.
+  resolution: 0.05   # mm/px
+  # Data type in NumPy convention (e.g., f4: 32-bit floating-point)
+  # NOTE: I set this to uint-8 (u1), so that an erroneus header that flags
+  # the data as signed int-8 (i1) doesn't corrupt the image.
+  # If the input is floating-point type, change this to f4 (32-bit) or f8 (64-bit).
+  dtype: u1
+  # If mem, the image data is loaded to memory, if hdd, it is kept on the disk.
+  storage: mem
+  # Specify or auto-generate a cost function mask for the blockface image
+  # (see details earlier)
+  mask:
+    file: null
+    automask: {thr: 0, uthr: 1}
+    function: null # dilated_object_mask
+    normalise: true
+  # Preview the blockface image after preprocessing.
+  preview: false
+  # Save the processed blockface image in TImage format to the output directory.
+  export: false
+  # Create a PNG version of the blockface image after preprocessing.
+  snapshot: false
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ PREPROCESSING ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+
+# Operations to be carried out on the input images before registration.
+# For each input, the sequence of operations should be defined here, such that
+# the result of the first operation will be the input of the second operation.
+# Leave the fields empty ([]) for no operation. The operations must be
+# implemented in the registration script as functions under the same name by
+# which they are referenced here. For function templates, please see the source
+# code of the registration script.
+
+# Examples used here:
+# - block_preprocessing/histology_preprocessing: convert to grayscale
+# - match_block_resolution: downsample the histology image to the same
+# resolution as the blockface photo
+# - pad: add empty space to the histology image along all borders
+# (helps to prevent erroneous rotations)
+
+preprocessing:
+  block: []
+  histology: []
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~ REGISTRATION PARAMETERS ~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+
+# This section defines initial values and optimisation bounds for the
+# transformation parameters within each substage of the registration process.
+# The transformations are defined by the registration script as a chain of
+# elementary coordinate transformations. The first tx of the chain operates on
+# the pixel coordinates of the slice image, and the last one maps these
+# onto the pixel coordinates of the blockface photo (if the direction is h2b).
+
+# The transformation chain has the following components (in order):
+# 1. 2D rotation: phi angle of rotation about the centre of the histology image
+# 2. 2D scaling: (s) if isotropic or (s_x', s_y') if anisotropic
+# 3. 2D translation: (t_x', t_y') mm
+# 4. 2D affine (affine3d): 6 parameters of the affine matrix (LR, top-down)
+# 5. 2D deformation field (warp): N parameters (N: number of pixels)
+
+regparams:
+
+# ::::::::::::::::::::::::: Initial values + bounds :::::::::::::::::::::::::: #
+  init:
+    rotation:
+      mode: deg                  # unit
+      x0: 0.0                    # initial value [unit]
+      lb: -180                   # lower bound [unit]
+      ub: 180                    # upper bound [unit]
+    scale:
+      x0: 1.0                    # initial value; [1.0, 1.0] if anisotropic
+      lb: 0.7                    # lower bound;   [0.7, 0.7] if anisotropic
+      ub: 1.3                    # upper bound;   [1.3, 1.3] if anisotropic
+    translation:
+      x0: [ 0.0, 0.0 ]           # initial values [mm]
+      lb: [ -5.0, -5.0 ]         # lower bounds [mm]
+      ub: [ 5.0, 5.0 ]           # upper bounds [mm]
+    affine:
+      x0: [ 1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0 ]      # initial values (affine matrix)
+      lb: [ 0.95, -0.2, -1.0,
+            -0.2, 0.95, -1.0 ]   # lower bounds
+      ub: [ 1.05, 0.2, 1.0,
+            0.2, 1.05, 1.0 ]     # upper bounds
+    nonlinear:
+      x0: 0.0                    # initial deformations [mm]
+      lb: null                   # lower bounds [mm]; null = unbounded
+      ub: null                   # upper bounds [mm]; null = unbounded
+
+# ::::::::::::::::::::::::: Stage 1 - rotation search :::::::::::::::::::::::: #
+
+  # Stage 1 looks for the best rotation parameter by trying various options,
+  # then fine-tuning the best one using local gradient-free bounded
+  # optimisation (BOBYQA). During the optimisation, the scaling and the
+  # translation parameters are allowed to vary, but these will be optimised
+  # further in Stage 2 after the best rotation was found.
+
+  rotsearch:
+    # Scaling factor for the input images. If <1, the search for the best
+    # rotation parameter will be conducted on downsampled versions of the
+    # images. This is recommended, since the rotational alignment should only
+    # depend on coarse features of the images, not high-resolution details,
+    # which may remain out of alignment at this coarse optimisation stage.
+    scale: 0.25
+    # Rotational increment in degrees for the coarse search.
+    coarse: 5   # deg
+    # Parameter change normalised to the full range of the rotation angle at
+    # the start of the fine optimisation. Larger values may facilitate faster
+    # convergence if the cost function is smooth. Otherwise, the accuracy of the
+    # optimisation may be limited.
+    opt_step: 0.5
+    # Absolute parameter tolerances (stopping condition).
+    # Parameters: 1 rotation angle (rad), 1 scaling factor, 2 translations (mm)
+    # If anisotropic scaling is used, xtol_abs should be 5-dimensional, and the
+    # 2nd and 3rd parameters would correspond to the axis-specific scaling
+    # factors.
+    xtol_abs: [ 0.001, 0.001, 0.001, 0.001 ]   # units: rad, 1, mm, mm
+    # Relative parameter tolerances (stopping condition). Parameter-specific
+    # values may be specified as a 4-dimensional vector as above (or
+    # 5-dimensional if scaling is anisotropic). See the NLOpt documentation for
+    # more details on xtol_rel, as well as on other conditions, such as
+    # ftol_abs, ftol_rel, and maxiter.
+    xtol_rel: 0.01
+    # Live view of Stage 1. This feature is only recommended for debugging
+    # because it slows down the registration.
+    visualise: false
+
+# ::::::::::::::::::::::::: Stage 2 - rigid alignment :::::::::::::::::::::::: #
+
+  # Joint BOBYQA optimisation of the scaling, rotation, and translation
+  # parameters, starting from the best rotation estimate. The optimisation
+  # starts at a coarse resolution, and proceeds through gradually higher
+  # resolution levels.
+
+  rigid:
+    # Downsampling factors for the images that define the resolution levels.
+    scaling: [16, 8, 4, 2]
+    # Gaussian smoothing radii (sigma) in pixels at each resolution level.
+    # Smoothing is applied in equal amounts to both images. 0: no smoothing.
+    smoothing: [0, 0, 0, 0]
+    # Parameter changes normalised to the full range of the parameters at
+    # the start of the optimisation.
+    opt_step: 0.1
+    # Absolute parameter tolerances (stopping condition).
+    # Parameters: 1 rotation angle (rad), 1 scaling factor, 2 translations (mm)
+    # If anisotropic scaling is used, xtol_abs should be 5-dimensional, and the
+    # 2nd and 3rd parameters would correspond to the axis-specific scaling
+    # factors.
+    xtol_abs: [0.001, 0.001, 0.001, 0.001]   # units: rad, 1, mm, mm
+    # Relative parameter tolerances (stopping condition).
+    xtol_rel: 0.01
+    # Live view of Stage 2. Recommended only for debugging.
+    visualise: false
+
+# :::::::::::::::::::::::: Stage 3 - affine alignment :::::::::::::::::::::::: #
+
+  # BOBYQA optimisation of affine matrix parameters at multiple resolution
+  # levels.
+
+  affine:
+    # Downsampling factors to define the resolution levels.
+    scaling: [8, 4, 2]
+    # Gaussian smoothing radii (sigma) in pixels at each resolution level.
+    smoothing: [0, 0, 0]
+    # Parameter changes normalised to the full range of the parameters at
+    # the start of the optimisation.
+    opt_step: 0.1
+    # Absolute parameter tolerances (stopping condition).
+    # Parameters: 6 parameters of the unraveled 2D affine matrix
+    # (left-to-right, top-down).
+    xtol_abs: [0.001, 0.001, 0.001,
+               0.001, 0.001, 0.001]
+    # Relative parameter tolerances (stopping condition). See also earlier.
+    xtol_rel: 0.01
+    # Live view of Stage 3. Recommended only for debugging.
+    visualise: false
+
+# :::::::::::::::::::::: Stage 4 - non-linear alignment :::::::::::::::::::::: #
+
+  # Optimising the vectors of a pixelwise-defined displacement field at
+  # multiple resolution levels.
+
+  nonlinear:
+    # Extent of spatial smoothing in the cost function calculation (px)
+    sigma: 1
+    # Kernel size for the cost function calculation (sigmas).
+    truncate: 1.5
+    # Weight factor of the regularisation term in the cost function. Increasing
+    # the weight leads to smoother but potentially less accurate deformations.
+    # Lower weights may lead to topological defects (e.g., foldover).
+    # Recommended range: 0.3-0.6
+    regweight: 0.3
+    # Downsampling factors to define the resolution levels.
+    scaling: [16, 8, 4, 2, 1]
+    # Gaussian smoothing radii (sigma) in pixels at each resolution level.
+    smoothing: [0, 0, 0, 0, 0]
+    # Absolute parameter tolerances (stopping condition).
+    xtol_abs: 0.1   # mm
+    # Relative parameter tolerances (stopping condition).
+    xtol_rel: 0.01
+    # Maximum number of iterations at each resolution level
+    # (stopping condition).
+    maxiter: [50, 50, 50, 25, 25]
+    # Live view of Stage 4. Recommended only for debugging.
+    visualise: false
+
+...
