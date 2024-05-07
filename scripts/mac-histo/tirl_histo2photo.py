@@ -74,6 +74,10 @@ for fname_histo in FNAMES_HISTO:
     with open(TIRLPARAM, 'r') as f:
         param = yaml.full_load(f)
 
+    # TODO: read pixel size from JSON sidecar
+    # I am currently keeping Istvan's value of 50um, even though it
+    # should be 80um for MR256.
+
     param['histology']['file'] = fname_histo
     param['block']['file'] = fname_photo
     param['general']['outputdir'] = out_folder_sample
