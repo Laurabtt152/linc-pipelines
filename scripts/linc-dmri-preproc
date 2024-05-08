@@ -1,0 +1,564 @@
+#!/bin/tcsh -f
+
+#
+# Parse command-line arguments
+#
+if ($#argv == 0) goto usage_exit
+
+if (! $?LINCROOT) then
+  echo "ERROR: Environment variable LINCROOT is not defined"
+  echo "ERROR: This must be set to the root directory of the LINC data tree"
+  exit 1
+endif
+
+set dataset = ()
+set subj = ()
+set acq = ()
+set runlist = ()
+
+set realorien = RIP
+
+set cmd = ($argv)
+
+while( $#cmd != 0 )
+  set flag = $cmd[1]
+  shift cmd
+
+  switch($flag)
+    case "-d":
+      if ($#cmd == 0) then
+        echo "ERROR: Option -d requires an argument"
+        exit 1
+      endif
+      set dataset = $cmd[1]
+      shift cmd
+      breaksw
+
+    case "-s":
+      if ($#cmd == 0) then
+        echo "ERROR: Option -s requires an argument"
+        exit 1
+      endif
+      set subj = $cmd[1]
+      shift cmd
+      breaksw
+
+    case "-a":
+      if ($#cmd == 0) then
+	echo "ERROR: Option -a requires an argument"
+	exit 1
+      endif
+      set acq = $cmd[1]
+      shift cmd
+      breaksw
+
+    case "-r":
+      while ($#cmd > 0)
+        if ($cmd[1] =~ "-*") then
+          break
+        else
+          set runlist = ($runlist $cmd[1])
+          shift cmd
+        endif
+      end
+      if ($#runlist == 0) then
+	echo "ERROR: Option -r requires at least one argument"
+	exit 1
+      endif
+      breaksw
+
+    case "-o":
+      if ($#cmd == 0) then
+	echo "ERROR: Option -o requires an argument"
+	exit 1
+      endif
+      set realorient = $cmd[1]
+      shift cmd
+      breaksw
+  endsw
+end
+
+#
+# Check command-line arguments
+#
+if ($#dataset == 0) then
+  echo "ERROR: A dataset must be defined with -d"
+  exit 1
+endif
+
+if ($#subj == 0) then
+  echo "ERROR: A subject must be defined with -s"
+  exit 1
+endif
+
+if ($#acq == 0) then
+  echo "ERROR: An acquisition must be defined with -a"
+  exit 1
+endif
+
+#
+# Check input files
+#
+set rawdir = $LINCROOT/$dataset/rawdata/sub-$subj/dwi
+
+if (! -d $rawdir) then
+  echo "ERROR: Could not find raw data directory $rawdir"
+  exit 1
+endif
+
+# Are there multiple runs?
+if ($#runlist == 0) then
+  set dwilist = sub-${subj}_acq-${acq}
+else
+  set dwilist = `printf "sub-${subj}_acq-${acq}_run-%s " $runlist`
+endif
+
+# Are there complex data?
+if (-e ${dwilist[1]}_part-real_dwi.nii.gz && \
+    -e ${dwilist[1]}_part-imag_dwi.nii.gz) then
+  set iscomplex = 1
+else
+  set iscomplex = 0
+endif
+
+# Make sure that all input files exist
+foreach dwibase ($dwilist)
+  if ($iscomplex) then
+    set flist = ( ${dwibase}_part-real_dwi.nii.gz \
+                  ${dwibase}_part-imag_dwi.nii.gz )
+  else
+    set flist =   ${dwibase}_dwi.nii.gz
+  endif
+
+  set flist = ( $flist ${dwibase}_dwi.bval \
+                       ${dwibase}_dwi.bvec \
+                       ${dwibase}_dwi.json )
+
+  foreach fname ($flist)
+    if (! -e $rawdir/$fname) then
+      echo "ERROR: Could not find input file $rawdir/$fname"
+      exit 1
+    endif
+  end
+end
+
+#
+# Create output directory
+#
+umask 002
+set derdir = $LINCROOT/$dataset/derivatives/prep/sub-$subj/dwi
+set tmpdir = $derdir/linc-dmri-preproc.$$.tmp
+mkdir -p $tmpdir
+
+set dwibase = sub-${subj}_acq-${acq}
+
+#
+# Initialize log file
+#
+set LF = $derdir/$dwibase.log
+
+printf '\n\n' >> $LF
+echo New invocation of `basename $0` >> $LF
+printf '\n\n' >> $LF
+date >> $LF
+whoami >> $LF
+hostname >> $LF
+uname -a >> $LF
+limit >> $LF
+echo Current directory: `pwd` >> $LF
+echo Command line: $0 $argv >> $LF
+echo LINCROOT $LINCROOT >> $LF
+echo Packages: >> $LF
+dirname `which mri_info` >> $LF
+dirname `which fslinfo` >> $LF
+dirname `which tckinfo` >> $LF
+
+#
+# Concatenate multiple runs and/or complex data
+#
+if ($#dwilist == 1 && $iscomplex == 0) then	# Nothing to concatenate
+  set indwi = $rawdir/${dwilist}_dwi.nii.gz
+else
+  set cmd = mri_concat
+  if ($iscomplex) then
+    set cmd = ($cmd --i `printf "$rawdir/%s_part-real_dwi.nii.gz " $dwilist`)
+    set cmd = ($cmd     `printf "$rawdir/%s_part-imag_dwi.nii.gz " $dwilist`)
+  else
+    set cmd = ($cmd --i `printf "$rawdir/%s_dwi.nii.gz " $dwilist`)
+  endif
+  set cmd = ($cmd --o $tmpdir/dwi_orig.nii.gz)
+  echo $cmd | tee -a $LF
+  $cmd |& tee -a $LF
+
+  set indwi = $tmpdir/dwi_orig.nii.gz
+endif
+
+# Correct orientation in header to true anatomical orientation
+set cmd = mri_convert
+set cmd = ($cmd --in_orientation $realorien)
+set cmd = ($cmd $indwi)
+set cmd = ($cmd $tmpdir/dwi_orig.nii.gz)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+# Concatenate b-values and vectors across multiple runs
+foreach fext (bval bvec)
+  set cmd = (cat `printf "$rawdir/%s_dwi.$fext " $dwilist`)
+  echo "$cmd > $tmpdir/dwi_orig.${fext}s" | tee -a $LF
+  ($cmd > $tmpdir/dwi_orig.${fext}s) >>& $LF
+end
+
+# Convert image and vectors to LAS orientation
+set cmd = orientLAS
+set cmd = ($cmd $tmpdir/dwi_orig.nii.gz)
+set cmd = ($cmd $derdir/${dwibase}_desc-1orien_dwi.nii.gz)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+foreach fext (bval bvec)
+  set cmd = mv
+  set cmd = ($cmd $derdir/${dwibase}_desc-1orien_dwi.${fext}s)
+  set cmd = ($cmd $derdir/${dwibase}_desc-1orien_dwi.$fext)
+  echo $cmd |& tee -a $LF
+  $cmd |& tee -a $LF
+end
+
+#
+# Denoising
+#
+set cmd = dwidenoise
+set cmd = ($cmd -noise $derdir/${dwibase}_desc-2noise_sigma.nii.gz)
+set cmd = ($cmd -force)
+set cmd = ($cmd        $derdir/${dwibase}_desc-1orien_dwi.nii.gz)
+set cmd = ($cmd        $derdir/${dwibase}_desc-2noise_dwi.nii.gz)
+echo $cmd | tee -a $LF
+$cmd |& tee -a $LF
+
+# Compute normalized RMSE
+set cmd = fscalc
+set cmd = ($cmd     $derdir/${dwibase}_desc-1orien_dwi.nii.gz)
+set cmd = ($cmd sub $derdir/${dwibase}_desc-2noise_dwi.nii.gz)
+set cmd = ($cmd --o $tmpdir/dwi_den_err.nii.gz)
+echo $cmd | tee -a $LF
+$cmd |& tee -a $LF
+
+set cmd = mri_concat
+set cmd = ($cmd --i $tmpdir/dwi_den_err.nii.gz)
+set cmd = ($cmd --rms)
+set cmd = ($cmd --o $tmpdir/dwi_den_err_rms.nii.gz)
+echo $cmd | tee -a $LF
+$cmd |& tee -a $LF
+
+set cmd = mri_concat
+set cmd = ($cmd --i $derdir/${dwibase}_desc-1orien_dwi.nii.gz)
+set cmd = ($cmd --rms)
+set cmd = ($cmd --o $tmpdir/dwi_rms.nii.gz)
+echo $cmd | tee -a $LF
+$cmd |& tee -a $LF
+
+set cmd = fscalc
+set cmd = ($cmd     $tmpdir/dwi_den_err_rms.nii.gz)
+set cmd = ($cmd div $tmpdir/dwi_rms.nii.gz)
+set cmd = ($cmd --o $derdir/${dwibase}_desc-2noise_nrmse.nii.gz)
+echo $cmd | tee -a $LF
+$cmd |& tee -a $LF
+
+if ($iscomplex) then
+  # Compute magnitude of denoised compmlex DWIs
+  set ndir = `mri_info --nframes $derdir/${dwibase}_desc-2noise_dwi.nii.gz`
+  @ ndir = $ndir / 2
+
+  set cmd = mri_convert
+  set cmd = ($cmd --ndrop $ndir)
+  set cmd = ($cmd $derdir/${dwibase}_desc-2noise_dwi.nii.gz)
+  set cmd = ($cmd $tmpdir/dwi_den_real.nii.gz)
+  echo $cmd |& tee -a $LF
+  $cmd |& tee -a $LF
+
+  set cmd = mri_convert
+  set cmd = ($cmd --nskip $ndir)
+  set cmd = ($cmd $derdir/${dwibase}_desc-2noise_dwi.nii.gz)
+  set cmd = ($cmd $tmpdir/dwi_den_imag.nii.gz)
+  echo $cmd |& tee -a $LF
+  $cmd |& tee -a $LF
+
+  set cmd = fscalc
+  set cmd = ($cmd     $tmpdir/dwi_den_real.nii.gz)
+  set cmd = ($cmd mag $tmpdir/dwi_den_imag.nii.gz)
+  set cmd = ($cmd --o $derdir/${dwibase}_desc-2noise_dwi.nii.gz)
+  echo $cmd |& tee -a $LF
+  $cmd |& tee -a $LF
+endif
+
+foreach fext (bval bvec)
+  set cmd = cp
+  set cmd = ($cmd $derdir/${dwibase}_desc-1orien_dwi.$fext)
+  set cmd = ($cmd $derdir/${dwibase}_desc-2noise_dwi.$fext)
+  echo $cmd | tee -a $LF
+  $cmd |& tee -a $LF
+end
+
+#
+# Correction for Gibbs ringing
+#
+set json = $rawdir/${dwilist[1]}_dwi.json
+set acq_plane = `awk '$1~/"SliceOrientation":/ {print $2}' $json`
+set acq_plane = `echo $acq_plane | sed 's/,$//; s/"//g'`
+
+# In-plane dimensions in original (acquired) image orientation
+if ($acq_plane == axial) then
+  set xorig = `echo $realorien | awk '{print substr($0,1,1)}'`
+  set yorig = `echo $realorien | awk '{print substr($0,2,1)}'`
+else if ($acq_plane == coronal) then
+  set xorig = `echo $realorien | awk '{print substr($0,1,1)}'`
+  set yorig = `echo $realorien | awk '{print substr($0,3,1)}'`
+else if ($acq_plane == sagittal) then
+  set xorig = `echo $realorien | awk '{print substr($0,2,1)}'`
+  set yorig = `echo $realorien | awk '{print substr($0,3,1)}'`
+else
+  echo "ERROR: acq_plane must be axial, coronal, or sagittal
+  exit 1
+endif
+
+# In-plane dimensions in current (LAS) image orientation
+if ($xorig == L || $xorig == R) then
+  set xaxis = 0
+else if ($xorig == A || $xorig == P) then
+  set xaxis = 1
+else
+  set xaxis = 2
+endif
+
+if ($yorig == L || $yorig == R) then
+  set yaxis = 0
+else if ($yorig == A || $yorig == P) then
+  set yaxis = 1
+else
+  set yaxis = 2
+endif
+
+set cmd = mrdegibbs
+set cmd = ($cmd -axes $xaxis,$yaxis)
+set cmd = ($cmd -force)
+set cmd = ($cmd $derdir/${dwibase}_desc-2noise_dwi.nii.gz)
+set cmd = ($cmd $derdir/${dwibase}_desc-3gibbs_dwi.nii.gz)
+echo $cmd | tee -a $LF
+$cmd |& tee -a $LF
+
+foreach fext (bval bvec)
+  set cmd = cp
+  set cmd = ($cmd $derdir/${dwibase}_desc-2noise_dwi.$fext)
+  set cmd = ($cmd $derdir/${dwibase}_desc-3gibbs_dwi.$fext)
+  echo $cmd | tee -a $LF
+  $cmd |& tee -a $LF
+end
+
+#
+# Check: if low-b image is b>150, may need to set to b=50 or 0 ...
+#
+# Masking
+#
+# Find a b=0 image
+set bmin = `grep -v ^$ $derdir/${dwibase}_desc-3gibbs_dwi.bval \
+            | sort --numeric-sort | head -1`
+set ibmin = `cat $derdir/${dwibase}_desc-3gibbs_dwi.bval \
+             | awk -v bmin=$bmin '{if ($1 == bmin) print NR}' | head -1`
+
+# Find images alone the x, y, and z gradients from a low b-shell
+set bshell = `cat $derdir/${dwibase}_desc-3gibbs_dwi.bval \
+              | awk '{if ($1 >= 1000) print}' | sort --numeric-sort | head -1`
+set ishell = `cat $derdir/${dwibase}_desc-3gibbs_dwi.bval \
+              | awk -v b=$bshell '{if ($1 >= b*0.95 && $1 <= b*1.05) print NR}'`
+set plist = "${ishell[1]}p"`printf ";%sp" $ishell[2-$#ishell]`
+
+set xmax = `sed -n "$plist" $derdir/${dwibase}_desc-3gibbs_dwi.bvec \
+            | awk '{print $1}' | sed 's/-//' | sort --numeric | tail -1`
+set ixmax = `sed -n "$plist" $derdir/${dwibase}_desc-3gibbs_dwi.bvec \
+             | awk -v x=$xmax '{if ($1 == x || $1 == -x) print NR}' | head -1`
+set ixmax = $ishell[$ixmax]
+
+set ymax = `sed -n "$plist" $derdir/${dwibase}_desc-3gibbs_dwi.bvec \
+            | awk '{print $2}' | sed 's/-//' | sort --numeric | tail -1`
+set iymax = `sed -n "$plist" $derdir/${dwibase}_desc-3gibbs_dwi.bvec \
+             | awk -v y=$ymax '{if ($2 == y || $2 == -y) print NR}' | head -1`
+set iymax = $ishell[$iymax]
+
+set zmax = `sed -n "$plist" $derdir/${dwibase}_desc-3gibbs_dwi.bvec \
+            | awk '{print $3}' | sed 's/-//' | sort --numeric | tail -1`
+set izmax = `sed -n "$plist" $derdir/${dwibase}_desc-3gibbs_dwi.bvec \
+             | awk -v z=$zmax '{if ($3 == z || $3 == -z) print NR}' | head -1`
+set izmax = $ishell[$izmax]
+
+sed -n "${ibmin}p;${ixmax}p;${iymax}p;${izmax}p" \
+  $derdir/${dwibase}_desc-3gibbs_dwi.bval \
+  > $tmpdir/lowb_shell.bval
+sed -n "${ibmin}p;${ixmax}p;${iymax}p;${izmax}p" \
+  $derdir/${dwibase}_desc-3gibbs_dwi.bvec \
+  > $tmpdir/lowb_shell.bvec
+
+set framelist = `printf '%s\n' $ibmin $ixmax $iymax $izmax \
+                 | sort --numeric | awk '{print $1-1}'`
+
+set cmd = mri_convert
+set cmd = ($cmd --frame $framelist)
+set cmd = ($cmd $derdir/${dwibase}_desc-3gibbs_dwi.nii.gz)
+set cmd = ($cmd $tmpdir/lowb_shell.nii.gz)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+set cmd = dwi2mask
+set cmd = ($cmd -fslgrad $tmpdir/lowb_shell.bvec $tmpdir/lowb_shell.bval)
+set cmd = ($cmd -force)
+set cmd = ($cmd $tmpdir/lowb_shell.nii.gz)
+set cmd = ($cmd $derdir/${dwibase}_label-brain_desc-lowb_mask.nii.gz)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+set cmd = mri_binarize
+set cmd = ($cmd --i $derdir/${dwibase}_label-brain_desc-lowb_mask.nii.gz)
+set cmd = ($cmd --min .5 --dilate 3 --erode 2)
+set cmd = ($cmd --o $derdir/${dwibase}_label-brain_desc-lowb_mask.nii.gz)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+#
+# Compensate for eddy-current distortions
+#
+# Create acquisition parameter file
+set acqp = (0 0 0 0)
+
+set json = $rawdir/${dwilist[1]}_dwi.json
+
+# Phase-encode direction in original (acquired) orientation
+set ped = `awk '$1~/"PhaseEncodingDirection":/ {print $2}' $json`
+set ped = `echo $ped | sed 's/,$//'`
+set dim = `echo $ped | awk '{if ($0~/i/) print 1; \
+                             if ($0~/j/) print 2; \
+                             if ($0~/k/) print 3'}`
+set sgn = `echo $ped | awk '{if ($0~/-/) {print -1} \
+                             else print 1'}`
+
+set str = `echo $realorien | awk -v dim=$dim '{print substr($0,dim,1)}'`
+
+# Phase-encode direction in current (LAS) orientation
+if ($str == L || $str == R) then
+  set dim = 1
+  if ($str == R) then
+    @ sgn = -1 * $sgn
+  endif
+else if ($str == A || $str == P) then
+  set dim = 2 
+  if ($str == P) then
+    @ sgn = -1 * $sgn
+  endif
+else
+  set dim = 3
+  if ($str == I) then
+    @ sgn = -1 * $sgn
+  endif
+endif
+
+set acqp[$dim] = $sgn
+
+set rot = `awk '$1~/"TotalReadoutTime":/ {print $2}' $json`
+set rot = `echo $rot | sed 's/,$//'`
+
+set acqp[4] = $rot
+
+echo $acqp > $derdir/${dwibase}_desc-4eddy_acqp.txt
+
+# Create volume index file
+echo `awk '{printf "1 "}' $derdir/${dwibase}_desc-3gibbs_dwi.bval` \
+  > $derdir/${dwibase}_desc-4eddy_index.txt
+
+set cmd = eddy_openmp
+set cmd = ($cmd --imain=$derdir/${dwibase}_desc-3gibbs_dwi.nii.gz)
+set cmd = ($cmd --mask=$derdir/${dwibase}_label-brain_desc-lowb_mask.nii.gz)
+set cmd = ($cmd --acqp=$derdir/${dwibase}_desc-4eddy_acqp.txt)
+set cmd = ($cmd --index=$derdir/${dwibase}_desc-4eddy_index.txt)
+set cmd = ($cmd --bvals=$derdir/${dwibase}_desc-3gibbs_dwi.bval)
+set cmd = ($cmd --bvecs=$derdir/${dwibase}_desc-3gibbs_dwi.bvec)
+set cmd = ($cmd --out=$derdir/${dwibase}_desc-4eddy_dwi)
+set cmd = ($cmd --data_is_shelled --cnr_maps --residuals)
+set cmd = ($cmd --dont_peas)	# Do NOT perform post-eddy alignment of shells
+set cmd = ($cmd -v)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+set cmd = cp
+set cmd = ($cmd $derdir/${dwibase}_desc-3gibbs_dwi.bval)
+set cmd = ($cmd $derdir/${dwibase}_desc-4eddy_dwi.bval)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+# Transpose rotated gradient vector table
+set xx = `awk 'NR==1' $derdir/${dwibase}_desc-4eddy_dwi.eddy_rotated_bvecs`
+set yy = `awk 'NR==2' $derdir/${dwibase}_desc-4eddy_dwi.eddy_rotated_bvecs`
+set zz = `awk 'NR==3' $derdir/${dwibase}_desc-4eddy_dwi.eddy_rotated_bvecs`
+
+set xx = `echo $xx | sed 's/nan/0\.0/g'`
+set yy = `echo $yy | sed 's/nan/0\.0/g'`
+set zz = `echo $zz | sed 's/nan/0\.0/g'`
+
+set cmd = (rm -f $derdir/${dwibase}_desc-4eddy_dwi.bvec)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+@ k = 1
+while ($k <= $#xx)
+  echo $xx[$k] $yy[$k] $zz[$k] >> $derdir/${dwibase}_desc-4eddy_dwi.bvec
+  @ k = $k + 1
+end
+
+#
+# Compensate for intensity bias field
+#
+set cmd = dwibiascorrect
+set cmd = ($cmd ants)
+set cmd = ($cmd -bias    $derdir/${dwibase}_desc-5bias_map.nii.gz)
+set cmd = ($cmd -fslgrad $derdir/${dwibase}_desc-4eddy_dwi.bvec)
+set cmd = ($cmd          $derdir/${dwibase}_desc-4eddy_dwi.bval)
+set cmd = ($cmd -mask    $derdir/${dwibase}_label-brain_desc-lowb_mask.nii.gz)
+set cmd = ($cmd -nthreads 4)
+set cmd = ($cmd -force)
+set cmd = ($cmd          $derdir/${dwibase}_desc-4eddy_dwi.nii.gz)
+set cmd = ($cmd          $derdir/${dwibase}_desc-5bias_dwi.nii.gz)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+foreach fext (bval bvec)
+  set cmd = cp
+  set cmd = ($cmd $derdir/${dwibase}_desc-4eddy_dwi.$fext)
+  set cmd = ($cmd $derdir/${dwibase}_desc-5bias_dwi.$fext)
+  echo $cmd |& tee -a $LF
+  $cmd |& tee -a $LF
+end
+
+set cmd = (rm -rf $tmpdir)
+echo $cmd |& tee -a $LF
+$cmd |& tee -a $LF
+
+exit 0
+
+#
+# Usage info
+#
+usage_exit:
+  echo ""
+  echo "USAGE:" `basename $0`
+  echo ""
+  echo "Required arguments"
+  echo "  -d <number> : 6-digit number of the dataset from lincbrain.org"
+  echo "  -s <name>   : subject name (without the sub- prefix)"
+  echo "  -a <name>   : acquisition name (without the acq- prefix)"
+  echo ""
+  echo "Optional arguments"
+  echo "  -r <number(s)> : run number(s) (needed if there are multiple runs"
+  echo "                   with the same acquisition name)"
+  echo "  -o <XYZ>       : true anatomical orientation of the ex vivo brain"
+  echo "                   sample in the images, usually different from the"
+  echo "                   orientation in the raw DWI header (default: RIP)"
+  echo ""
+
+  exit 1
+
