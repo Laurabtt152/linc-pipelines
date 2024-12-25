@@ -16,13 +16,10 @@ def setup_dask_cluster():
     return client
 
 def nifti_to_zarr(nifti_path, zarr_path):
-    """Convert a NIfTI file to Zarr format."""
-    img = nib.load(nifti_path)
-    data = img.get_fdata()
-    z = zarr.open(zarr_path, mode='w', shape=data.shape, dtype=data.dtype)
-    z[:] = data
+    """Convert a NIfTI file to Zarr format using @balbasty's tool."""
+    from _nii2zarr import nii_to_zarr  # Assuming the tool is implemented here
+    nii_to_zarr(nifti_path, zarr_path)
     print(f"Converted {nifti_path} to {zarr_path}")
-    return z
 
 def load_zarr_data(zarr_path):
     """Load data directly from an existing Zarr file."""
@@ -73,14 +70,9 @@ def process_3d_data(dask_data, output_path, mask_diameter=None):
     zarr.save(output_path, processed_data)
     print(f"Processed data saved to {output_path}")
 
-if __name__ == "__main__":
-    # Initialize Dask cluster
+def wrapper_function(nifti_path, zarr_path, processed_output_path, mask_diameter=256):
+    """High-level wrapper function for the pipeline."""
     client = setup_dask_cluster()
-
-    # Paths
-    nifti_path = "path/to/input.nii.gz"  # Path to the NIfTI file (if applicable)
-    zarr_path = "path/to/data.zarr"      # Path to the Zarr file (output or input)
-    processed_output_path = "path/to/processed_output.zarr"
 
     # Determine data source
     if os.path.exists(zarr_path):
@@ -92,6 +84,14 @@ if __name__ == "__main__":
         dask_data = load_zarr_data(zarr_path)
 
     # Processing
-    process_3d_data(dask_data, processed_output_path, mask_diameter=256)
+    process_3d_data(dask_data, processed_output_path, mask_diameter=mask_diameter)
 
     client.close()
+
+if __name__ == "__main__":
+    # Paths passed as arguments
+    nifti_path = "path/to/input.nii.gz"  # Path to the NIfTI file (if applicable)
+    zarr_path = "path/to/data.zarr"      # Path to the Zarr file (output or input)
+    processed_output_path = "path/to/processed_output.zarr"
+
+    wrapper_function(nifti_path, zarr_path, processed_output_path)
